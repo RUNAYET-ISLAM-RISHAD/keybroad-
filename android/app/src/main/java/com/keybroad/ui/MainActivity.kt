@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(16.dp))
                         KeyboardView(
                             keys = state.keys,
+                            isShift = state.isShift,
                             onKeyPress = { keyData, isShift, isCaps ->
                                 viewModel.processKey(keyData, isShift, isCaps)
                             },

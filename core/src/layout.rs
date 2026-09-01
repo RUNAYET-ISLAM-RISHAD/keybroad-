@@ -142,15 +142,15 @@ mod tests {
     fn test_phonetic_has_key_mappings() {
         let layout = load_layout(LayoutType::Phonetic).unwrap();
 
-        // 'k' (107) should map to ক (0x0995)
+        // Phonetic is now Roman QWERTY (Avro-style) - 'k' maps to "k", not ক
         assert!(layout.has_key('k' as u32));
         let mapping = layout.key_map.get(&('k' as u32)).unwrap();
-        assert_eq!(mapping.output, "\u{0995}");
+        assert_eq!(mapping.output, "k");
 
-        // 'a' (97) should map to া (0x09be)
+        // 'a' should map to "a" (Roman), transliteration happens in engine
         assert!(layout.has_key('a' as u32));
         let mapping = layout.key_map.get(&('a' as u32)).unwrap();
-        assert_eq!(mapping.output, "\u{09be}");
+        assert_eq!(mapping.output, "a");
     }
 
     #[test]
@@ -170,14 +170,18 @@ mod tests {
     fn test_jatiya_has_key_mappings() {
         let layout = load_layout(LayoutType::Jatiya).unwrap();
 
-        // 'i' should map to ক (0x0995)
+        // Jatiya: j -> ক, i -> হ, g -> hasanta
+        assert!(layout.has_key('j' as u32));
+        let mapping = layout.key_map.get(&('j' as u32)).unwrap();
+        assert_eq!(mapping.output, "ক");
+
         assert!(layout.has_key('i' as u32));
         let mapping = layout.key_map.get(&('i' as u32)).unwrap();
-        assert_eq!(mapping.output, "\u{0995}");
+        assert_eq!(mapping.output, "হ");
 
-        // '\\' should map to hasanta (0x09CD)
-        assert!(layout.has_key('\\' as u32));
-        let mapping = layout.key_map.get(&('\\' as u32)).unwrap();
+        // hasanta is on 'g' for Jatiya
+        assert!(layout.has_key('g' as u32));
+        let mapping = layout.key_map.get(&('g' as u32)).unwrap();
         assert_eq!(mapping.output, "\u{09CD}");
     }
 
@@ -185,14 +189,18 @@ mod tests {
     fn test_probhat_has_key_mappings() {
         let layout = load_layout(LayoutType::Probhat).unwrap();
 
-        // 'i' should map to ক (0x0995)
+        // Probhat: k -> ক, i -> ি
+        assert!(layout.has_key('k' as u32));
+        let mapping = layout.key_map.get(&('k' as u32)).unwrap();
+        assert_eq!(mapping.output, "ক");
+
         assert!(layout.has_key('i' as u32));
         let mapping = layout.key_map.get(&('i' as u32)).unwrap();
-        assert_eq!(mapping.output, "\u{0995}");
+        assert_eq!(mapping.output, "ি");
 
-        // '\\' should map to hasanta (0x09CD)
-        assert!(layout.has_key('\\' as u32));
-        let mapping = layout.key_map.get(&('\\' as u32)).unwrap();
+        // hasanta is on '/' for Probhat
+        assert!(layout.has_key('/' as u32));
+        let mapping = layout.key_map.get(&('/' as u32)).unwrap();
         assert_eq!(mapping.output, "\u{09CD}");
     }
 
@@ -200,14 +208,17 @@ mod tests {
     fn test_unijoy_has_key_mappings() {
         let layout = load_layout(LayoutType::Unijoy).unwrap();
 
-        // 'i' should map to ক (0x0995)
+        // UniJoy: j -> ক, i -> হ, g -> hasanta
+        assert!(layout.has_key('j' as u32));
+        let mapping = layout.key_map.get(&('j' as u32)).unwrap();
+        assert_eq!(mapping.output, "ক");
+
         assert!(layout.has_key('i' as u32));
         let mapping = layout.key_map.get(&('i' as u32)).unwrap();
-        assert_eq!(mapping.output, "\u{0995}");
+        assert_eq!(mapping.output, "হ");
 
-        // '\\' should map to hasanta (0x09CD)
-        assert!(layout.has_key('\\' as u32));
-        let mapping = layout.key_map.get(&('\\' as u32)).unwrap();
+        assert!(layout.has_key('g' as u32));
+        let mapping = layout.key_map.get(&('g' as u32)).unwrap();
         assert_eq!(mapping.output, "\u{09CD}");
     }
 
@@ -249,8 +260,8 @@ mod tests {
 
     #[test]
     fn test_bengali_layouts_have_hasanta() {
+        // Phonetic is Roman transliteration, no hasanta key - only fixed layouts
         let layout_types = [
-            LayoutType::Phonetic,
             LayoutType::Jatiya,
             LayoutType::Probhat,
             LayoutType::Unijoy,
@@ -258,9 +269,14 @@ mod tests {
 
         for layout_type in &layout_types {
             let layout = load_layout(*layout_type).unwrap();
-            // Backslash should map to hasanta (0x09CD) in Bengali layouts
-            assert!(layout.has_key('\\' as u32), "Layout {:?} missing hasanta key", layout_type);
-            let mapping = layout.key_map.get(&('\\' as u32)).unwrap();
+            let hasanta_key = match layout_type {
+                LayoutType::Jatiya => 'g',
+                LayoutType::Probhat => '/',
+                LayoutType::Unijoy => 'g',
+                _ => '\\',
+            };
+            assert!(layout.has_key(hasanta_key as u32), "Layout {:?} missing hasanta key '{}'", layout_type, hasanta_key);
+            let mapping = layout.key_map.get(&(hasanta_key as u32)).unwrap();
             assert_eq!(mapping.output, "\u{09CD}", "Layout {:?} hasanta mapping incorrect", layout_type);
         }
     }

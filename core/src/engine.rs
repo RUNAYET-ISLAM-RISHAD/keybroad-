@@ -1,77 +1,38 @@
-/// Core Bengali keyboard engine.
-///
-/// The engine is designed as a pure functional component:
-/// - Same input always produces same output (deterministic)
-/// - No I/O (no network, no file access, no UI)
-/// - No garbage collection pauses (uses arena-style allocation in production)
-///
-/// This implementation supports:
-/// - Layout-based key mapping (loaded from JSON)
-/// - Hasanta (্) handling for conjunct formation via backspace trick
-/// - Basic shift handling
-/// - Backspace and enter
-/// - Composition buffer management
-///
-/// # Conjunct Formation (Backspace Trick)
-///
-/// Bengali conjuncts are formed using hasanta (virama):
-/// 1. Consonant is committed immediately (e.g., ক)
-/// 2. When hasanta is typed after a consonant, a Backspace(1) action is
-///    emitted to remove the consonant, and hasanta_pending is set.
-/// 3. When the next consonant arrives, the full conjunct sequence is
-///    committed (e.g., ক্গ = ক + ্ + গ).
-/// 4. If the next character is not a consonant, the hasanta state is
-///    cleared and the hasanta character is committed.
-
 use std::collections::{HashMap, HashSet};
 
 use crate::conjunct::ConjunctTable;
 use crate::dictionary::Dictionary;
 use crate::layout::load_layout;
 use crate::ngram::NgramModel;
+use crate::phonetic::PhoneticEngine;
 use crate::types::*;
+use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
-/// Maximum number of words to keep in history
 const MAX_HISTORY: usize = 20;
-
-/// Characters that trigger word boundary finalization
 const WORD_BOUNDARY_CHARS: &[char] = &[' ', '\n', '.', ',', '!', '?', ';', ':'];
 
-/// The main Bengali keyboard engine.
 pub struct BengaliEngine {
-    /// Current engine state
     state: EngineState,
-    /// Loaded layouts (keyed by LayoutType)
     layouts: HashMap<LayoutType, Layout>,
-    /// Conjunct table for consonant classification
     conjuncts: ConjunctTable,
-    /// Dictionary for word suggestions and auto-correction
     dictionary: Option<Dictionary>,
-    /// N-gram prediction model
     ngram: NgramModel,
-    /// User-added words (runtime, mutable)
     user_words: HashSet<String>,
+    phonetic: PhoneticEngine,
 }
 
 impl BengaliEngine {
-    /// Create a new engine instance with the given layout.
-    ///
-    /// This loads the layout from the embedded JSON definition.
     pub fn new(layout: LayoutType) -> Self {
         let mut layouts = HashMap::new();
-
-        // Load the requested layout
         if let Ok(loaded_layout) = load_layout(layout) {
             layouts.insert(layout, loaded_layout);
         }
-
-        // Also pre-load English as fallback
         if layout != LayoutType::English {
             if let Ok(english_layout) = load_layout(LayoutType::English) {
                 layouts.insert(LayoutType::English, english_layout);
             }
         }
-
         Self {
             state: EngineState {
                 layout,
@@ -82,32 +43,25 @@ impl BengaliEngine {
             dictionary: Some(Dictionary::load_embedded()),
             ngram: NgramModel::load_embedded(),
             user_words: HashSet::new(),
+            phonetic: PhoneticEngine::new(),
         }
     }
 
-    /// Create a new engine from a layout string identifier.
     pub fn from_layout_str(layout_str: &str) -> Option<Self> {
         LayoutType::from_str(layout_str).map(|layout| Self::new(layout))
     }
 
-    /// Process a single key event and return actions for the platform.
     pub fn process_key(&mut self, event: KeyEvent) -> Result<Vec<OutputAction>, EngineError> {
-        // Only process key-down events
         if !event.is_down {
             return Ok(vec![OutputAction::Nothing]);
         }
-
-        // Handle special keys by key_code
         match event.key_code {
-            // Backspace key
             67 => {
                 return Ok(self.handle_backspace());
             }
-            // Enter key (commit composition)
             66 => {
                 return Ok(self.handle_enter());
             }
-            // Shift keys (left and right)
             59 | 60 => {
                 self.state.shift_state = match self.state.shift_state {
                     ShiftState::None => ShiftState::Shift,
@@ -119,7 +73,51 @@ impl BengaliEngine {
             _ => {}
         }
 
-        // Get the current layout
+        // Phonetic layout: use transliteration engine
+        if self.state.layout == LayoutType::Phonetic {
+            let mut ch = char::from_u32(event.unicode).ok_or(EngineError::InvalidKeyCode(event.unicode))?;
+            let shift_active = self.state.shift_state == ShiftState::Shift
+                || self.state.shift_state == ShiftState::CapsLock;
+            if shift_active && ch.is_ascii_lowercase() {
+                // For phonetic, shift maps to aspirated/retroflex variant via uppercase
+                // e.g., k + shift -> K -> খ, but we also handle digraph kh
+                // We'll convert to uppercase to trigger uppercase mapping if exists
+                // For now, keep as is and let phonetic handle shift via separate logic
+                // If shift, treat as uppercase for transliteration
+                ch = ch.to_ascii_uppercase();
+            }
+            if self.state.shift_state == ShiftState::Shift {
+                self.state.shift_state = ShiftState::None;
+            }
+            // Handle word boundary via phonetic engine
+            let is_boundary = WORD_BOUNDARY_CHARS.contains(&ch);
+            if is_boundary {
+                self.finalize_current_word();
+            }
+            let (new_text, actions) = self.phonetic.push_char(ch);
+            // Update composition buffer and current_word from new_text
+            // Clear and rebuild composition buffer from new_text (NFC normalized)
+            let normalized: String = new_text.nfc().collect();
+            self.state.composition_buffer.clear();
+            for c in normalized.chars() {
+                self.add_to_buffer(c);
+            }
+            if !is_boundary && ch != ' ' {
+                // Update current_word to last word fragment
+                // current_word should track last word after space
+                let last_word = normalized.split_whitespace().last().unwrap_or("").to_string();
+                self.state.current_word = last_word;
+            } else if is_boundary {
+                // For space, current_word was finalized, start new
+                self.state.current_word.clear();
+            }
+            // Return actions that represent diff (backspaces + commit)
+            // But phonetic diff is in terms of roman buffer, we need to provide actions for UI
+            // The actions from phonetic engine already contain Backspace + CommitText
+            return Ok(actions);
+        }
+
+        // Non-phonetic: fixed layout lookup
         let output_str = {
             let layout = self.layouts.get(&self.state.layout).ok_or_else(|| {
                 EngineError::LayoutLoadError(format!(
@@ -127,113 +125,97 @@ impl BengaliEngine {
                     self.state.layout.as_str()
                 ))
             })?;
-
-            // Determine if shift is active
             let shift_active = self.state.shift_state == ShiftState::Shift
                 || self.state.shift_state == ShiftState::CapsLock;
-
-            // Look up the character in the layout
             layout
                 .lookup(event.unicode, shift_active)
                 .ok_or_else(|| EngineError::InvalidKeyCode(event.unicode))?
                 .to_string()
         };
-
-        // Reset shift after single use (if not caps lock)
         if self.state.shift_state == ShiftState::Shift {
             self.state.shift_state = ShiftState::None;
         }
-
-        // Process the output character through the composition engine
         let actions = self.process_character(&output_str)?;
-
         Ok(actions)
     }
 
-    /// Process a character string from the layout lookup.
-    ///
-    /// This handles hasanta-based conjunct formation using the backspace trick.
     fn process_character(&mut self, output_str: &str) -> Result<Vec<OutputAction>, EngineError> {
         let mut actions = Vec::new();
-
-        // Check if this is a word boundary character (single char like space or punctuation)
         if output_str.len() == 1 {
             if let Some(ch) = output_str.chars().next() {
                 if WORD_BOUNDARY_CHARS.contains(&ch) {
-                    // Finalize current word before processing boundary char
                     self.finalize_current_word();
                 }
             }
         }
-
         for ch in output_str.chars() {
             let char_actions = self.process_single_char(ch)?;
             actions.extend(char_actions);
-
-            // Track word boundary: append regular characters to current_word
             if !WORD_BOUNDARY_CHARS.contains(&ch) {
                 self.state.current_word.push(ch);
             }
         }
-
+        // Normalize actions' CommitText to NFC
+        for action in &mut actions {
+            if let OutputAction::CommitText(ref mut s) = action {
+                let normalized: String = s.nfc().collect();
+                *s = normalized;
+            }
+        }
         Ok(actions)
     }
 
-    /// Process a single character through the composition engine.
-    ///
-    /// This is the core composition logic using the backspace trick:
-    /// 1. If hasanta is pending and new char is consonant → commit conjunct sequence
-    /// 2. If new char is hasanta after consonant → backspace + set hasanta_pending
-    /// 3. Otherwise → commit character directly
     fn process_single_char(&mut self, ch: char) -> Result<Vec<OutputAction>, EngineError> {
         let mut actions = Vec::new();
+        // Smart kar handling: if ch is vowel sign and last char in buffer is also vowel sign, replace
+        if Self::is_vowel_sign(ch) {
+            if let Some(last) = self.state.composition_buffer.last() {
+                if let Some(last_ch) = char::from_u32(last.unicode) {
+                    if Self::is_vowel_sign(last_ch) {
+                        // Replace previous vowel sign
+                        self.state.composition_buffer.pop();
+                        // Need to backspace one grapheme (but vowel sign is one codepoint)
+                        actions.push(OutputAction::Backspace(1));
+                        // Also need to handle current_word replacement?
+                        self.state.current_word.pop();
+                    }
+                }
+            }
+        }
 
-        // Check if this is a hasanta character
         if ConjunctTable::is_hasanta(ch) {
-            // Hasanta typed after a consonant → backspace trick
             if self.state.hasanta_base_consonant.is_some() {
-                // Remove the previously committed consonant from composition buffer
                 self.state.composition_buffer.pop();
-                // Emit Backspace(1) to tell platform to remove the character
                 actions.push(OutputAction::Backspace(1));
                 self.state.hasanta_pending = true;
-                // Don't output hasanta yet — wait for next consonant
                 return Ok(actions);
             }
-            // Hasanta without preceding consonant → output directly
             actions.push(OutputAction::CommitText(ch.to_string()));
             self.add_to_buffer(ch);
             return Ok(actions);
         }
 
-        // Check if this character is a consonant
         let is_consonant = self.conjuncts.is_consonant(ch);
-
-        // Case 1: Hasanta is pending and new char is a consonant → form conjunct
         if self.state.hasanta_pending && is_consonant {
             if let Some(base) = self.state.hasanta_base_consonant {
-                // Check if there's a special conjunct form
                 let seq = if let Some(conjunct_str) = self.conjuncts.lookup_hasanta_conjunct(base, ch) {
                     conjunct_str.to_string()
                 } else {
-                    // Default: output base + hasanta + consonant
                     format!("{}{}{}", base, ConjunctTable::hasanta(), ch)
                 };
-
-                actions.push(OutputAction::CommitText(seq.clone()));
-                for c in seq.chars() {
+                let normalized: String = seq.nfc().collect();
+                actions.push(OutputAction::CommitText(normalized.clone()));
+                for c in normalized.chars() {
                     self.add_to_buffer(c);
                 }
-
-                // Clear hasanta state
                 self.state.hasanta_pending = false;
                 self.state.hasanta_base_consonant = None;
                 return Ok(actions);
             }
         }
 
-        // Case 2: Consonant typed → commit immediately, remember for potential hasanta
         if is_consonant {
+            // Before pushing, if previous was consonant and we need to handle hasanta? Already via hasanta logic
             actions.push(OutputAction::CommitText(ch.to_string()));
             self.add_to_buffer(ch);
             self.state.hasanta_pending = false;
@@ -241,89 +223,122 @@ impl BengaliEngine {
             return Ok(actions);
         }
 
-        // Case 3: Non-consonant (vowel, digit, etc.) → commit directly
-        // Clear hasanta state if not consumed
         if self.state.hasanta_pending {
-            // Hasanta was pending but next char is not a consonant
-            // Output the hasanta character, then the new character
             actions.push(OutputAction::CommitText(ConjunctTable::hasanta().to_string()));
             self.add_to_buffer(ConjunctTable::hasanta());
             self.state.hasanta_pending = false;
             self.state.hasanta_base_consonant = None;
         }
 
+        // Normalize vowel sign placement: ensure vowel sign after consonant
+        // Already handled by smart kar above
         actions.push(OutputAction::CommitText(ch.to_string()));
         self.add_to_buffer(ch);
-
         Ok(actions)
     }
 
-    /// Handle backspace key press.
+    fn is_vowel_sign(ch: char) -> bool {
+        matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ' | '\u{09BC}' | '\u{09BE}'..='\u{09CC}')
+    }
+
     fn handle_backspace(&mut self) -> Vec<OutputAction> {
-        // Clear hasanta state if pending
+        // Phonetic layout: delegate to phonetic engine
+        if self.state.layout == LayoutType::Phonetic {
+            let actions = self.phonetic.backspace();
+            let new_text = self.phonetic.get_output().to_string();
+            let normalized: String = new_text.nfc().collect();
+            self.state.composition_buffer.clear();
+            for c in normalized.chars() {
+                self.add_to_buffer(c);
+            }
+            // Update current_word to last word
+            let last_word = normalized.split_whitespace().last().unwrap_or("").to_string();
+            self.state.current_word = last_word;
+            // Also need to handle hasanta state clear
+            self.state.hasanta_pending = false;
+            self.state.hasanta_base_consonant = None;
+            return actions;
+        }
+
         if self.state.hasanta_pending {
             self.state.hasanta_pending = false;
             self.state.hasanta_base_consonant = None;
             return vec![OutputAction::Nothing];
         }
-
-        // Clear base consonant if set (consonant was typed but no hasanta followed)
         if self.state.hasanta_base_consonant.is_some() {
             self.state.hasanta_base_consonant = None;
         }
-
-        // Remove from composition buffer
         if !self.state.composition_buffer.is_empty() {
-            self.state.composition_buffer.pop();
-            // Also remove last character from current_word if tracking
-            self.state.current_word.pop();
-            return vec![OutputAction::Backspace(1)];
+            // Grapheme-aware deletion
+            let text = self.composition_to_string();
+            let graphemes: Vec<&str> = text.graphemes(true).collect();
+            if graphemes.is_empty() {
+                return vec![OutputAction::Nothing];
+            }
+            let last_grapheme = graphemes.last().unwrap();
+            let grapheme_len = last_grapheme.chars().count() as u32;
+            // Remove grapheme from composition_buffer
+            for _ in 0..grapheme_len {
+                self.state.composition_buffer.pop();
+            }
+            // Remove from current_word as well (grapheme aware)
+            let current = self.state.current_word.clone();
+            let cur_graphemes: Vec<&str> = current.graphemes(true).collect();
+            if !cur_graphemes.is_empty() {
+                let new_current: String = cur_graphemes[..cur_graphemes.len()-1].concat();
+                self.state.current_word = new_current;
+            }
+            // Need to handle that deleting a grapheme may affect hasanta state
+            return vec![OutputAction::Backspace(grapheme_len)];
         }
-
         vec![OutputAction::Nothing]
     }
 
-    /// Handle enter key press.
     fn handle_enter(&mut self) -> Vec<OutputAction> {
         let mut actions = Vec::new();
-
-        // Finalize current word before enter
         self.finalize_current_word();
-
-        // If hasanta was pending, output it before committing
+        if self.state.layout == LayoutType::Phonetic {
+            // For phonetic, finalize phonetic engine?
+            // Just commit buffer
+            if !self.state.composition_buffer.is_empty() {
+                let text = self.composition_to_string();
+                // Clear phonetic buffer? Keep but reset?
+                self.phonetic.reset();
+                self.state.composition_buffer.clear();
+                actions.push(OutputAction::Backspace(1));
+                actions.push(OutputAction::CommitText(text));
+            }
+            if actions.is_empty() {
+                actions.push(OutputAction::Nothing);
+            }
+            return actions;
+        }
         if self.state.hasanta_pending {
             actions.push(OutputAction::CommitText(ConjunctTable::hasanta().to_string()));
             self.add_to_buffer(ConjunctTable::hasanta());
             self.state.hasanta_pending = false;
             self.state.hasanta_base_consonant = None;
         }
-
-        // Commit composition buffer if not empty
         if !self.state.composition_buffer.is_empty() {
             let text = self.composition_to_string();
             self.state.composition_buffer.clear();
             actions.push(OutputAction::Backspace(1));
             actions.push(OutputAction::CommitText(text));
         }
-
         if actions.is_empty() {
             actions.push(OutputAction::Nothing);
         }
-
         actions
     }
 
-    /// Get a reference to the current engine state.
     pub fn get_state(&self) -> &EngineState {
         &self.state
     }
 
-    /// Get a mutable reference to the engine state (for advanced operations).
     pub fn get_state_mut(&mut self) -> &mut EngineState {
         &mut self.state
     }
 
-    /// Reset the engine state (for new input field).
     pub fn reset(&mut self) {
         self.state.composition_buffer.clear();
         self.state.candidates.clear();
@@ -335,79 +350,55 @@ impl BengaliEngine {
         self.state.current_word.clear();
         self.state.history.clear();
         self.state.last_committed_word = None;
+        self.phonetic.reset();
     }
 
-    /// Switch to a different layout.
     pub fn set_layout(&mut self, layout: LayoutType) {
-        // Load the layout if not already loaded
         if !self.layouts.contains_key(&layout) {
             if let Ok(loaded_layout) = load_layout(layout) {
                 self.layouts.insert(layout, loaded_layout);
             }
         }
-
         self.state.layout = layout;
         self.reset();
     }
 
-    /// Enable or disable incognito mode.
     pub fn set_incognito(&mut self, enabled: bool) {
         self.state.incognito_mode = enabled;
     }
 
-    /// Check if incognito mode is active.
     pub fn is_incognito(&self) -> bool {
         self.state.incognito_mode
     }
 
-    /// Get current candidates.
     pub fn get_candidates(&self) -> &[CandidateWord] {
         &self.state.candidates
     }
 
-    /// Get a reference to a loaded layout.
     pub fn get_layout(&self, layout_type: LayoutType) -> Option<&Layout> {
         self.layouts.get(&layout_type)
     }
 
-    /// Get a reference to the current active layout.
     pub fn get_active_layout(&self) -> Option<&Layout> {
         self.layouts.get(&self.state.layout)
     }
 
-    /// Get a reference to the conjunct table.
     pub fn get_conjuncts(&self) -> &ConjunctTable {
         &self.conjuncts
     }
 
-    /// Replace the dictionary with a new one.
-    ///
-    /// This allows loading a custom dictionary at runtime.
     pub fn set_dictionary(&mut self, dictionary: Dictionary) {
         self.dictionary = Some(dictionary);
     }
 
-    /// Get word suggestions for the current input.
-    ///
-    /// Returns prefix matches and corrections combined, with corrections
-    /// prioritized when the current word is not in the dictionary.
-    /// Also checks user dictionary for exact matches.
-    ///
-    /// # Arguments
-    ///
-    /// * `current_word` - The partial word being typed
-    ///
-    /// # Returns
-    ///
-    /// A vector of `CandidateWord` suggestions, sorted by relevance.
     pub fn get_suggestions(&self, current_word: &str) -> Vec<CandidateWord> {
+        // Normalize input for suggestions
+        let normalized: String = current_word.nfc().collect();
+        let current_word = normalized.as_str();
         if current_word.is_empty() {
             return Vec::new();
         }
-
         let mut suggestions = Vec::new();
-
-        // 1. Check user dictionary first (highest priority)
         if self.user_words.contains(current_word) {
             suggestions.push(CandidateWord {
                 word: current_word.to_string(),
@@ -415,8 +406,6 @@ impl BengaliEngine {
                 source: WordSource::UserHistory,
             });
         }
-
-        // 2. Get prefix matches from main dictionary (up to 5)
         if let Some(ref dict) = self.dictionary {
             let prefix_matches = dict.get_prefix_matches(current_word, 5);
             for word in prefix_matches {
@@ -428,8 +417,6 @@ impl BengaliEngine {
                     });
                 }
             }
-
-            // 3. Get corrections if word is not in dictionary
             if !dict.is_word(current_word) && !self.user_words.contains(current_word) {
                 let corrections = dict.get_corrections(current_word, 2);
                 for word in corrections {
@@ -443,93 +430,68 @@ impl BengaliEngine {
                 }
             }
         }
-
         suggestions
     }
 
-    // === Private helpers ===
-
-    /// Finalize the current word and update history.
-    ///
-    /// This is called when a word boundary is detected (space, punctuation, enter).
-    /// If incognito mode is active, history and last_committed_word are not updated.
     fn finalize_current_word(&mut self) {
         if self.state.current_word.is_empty() {
             return;
         }
-
         let word = self.state.current_word.clone();
-
-        // Update history and last_committed_word (unless incognito mode is active)
+        let normalized: String = word.nfc().collect();
         if !self.state.incognito_mode {
-            self.state.history.insert(0, word.clone());
-            // Cap history at MAX_HISTORY
+            self.state.history.insert(0, normalized.clone());
             if self.state.history.len() > MAX_HISTORY {
                 self.state.history.truncate(MAX_HISTORY);
             }
-            self.state.last_committed_word = Some(word);
+            self.state.last_committed_word = Some(normalized);
         }
-
-        // Clear current_word for next word
         self.state.current_word.clear();
     }
 
-    /// Manually finalize the current word (useful for UI trigger like "send" button).
     pub fn finalize_word(&mut self) {
         self.finalize_current_word();
     }
 
-    /// Add a word to the user dictionary.
     pub fn add_user_word(&mut self, word: &str) {
-        self.user_words.insert(word.to_string());
+        let normalized: String = word.nfc().collect();
+        self.user_words.insert(normalized);
     }
 
-    /// Check if a word is in the user dictionary.
     pub fn is_user_word(&self, word: &str) -> bool {
-        self.user_words.contains(word)
+        let normalized: String = word.nfc().collect();
+        self.user_words.contains(&normalized)
     }
 
-    /// Get next-word suggestions based on n-gram context.
-    ///
-    /// Uses the last 1-2 words from history to predict what comes next.
     pub fn get_next_word_suggestions(&self, limit: usize) -> Vec<CandidateWord> {
         if self.state.incognito_mode {
             return Vec::new();
         }
-
         let mut context = Vec::new();
-
-        // Build context from last_committed_word and history
         if let Some(ref last_word) = self.state.last_committed_word {
             context.push(last_word.clone());
-            // If we have history, use the second-to-last word for trigram
             if !self.state.history.is_empty() {
                 context.insert(0, self.state.history[0].clone());
             }
         }
-
         if context.is_empty() {
             return Vec::new();
         }
-
         self.ngram.predict_next(&context, limit)
     }
 
-    // === Private helpers ===
-
-    /// Add a character to the composition buffer.
     fn add_to_buffer(&mut self, ch: char) {
         let glyph = Glyph::simple(ch as u32);
         self.state.composition_buffer.push(glyph);
     }
 
-    /// Convert composition buffer to a string.
     fn composition_to_string(&self) -> String {
-        self.state
+        let s: String = self.state
             .composition_buffer
             .iter()
             .filter_map(|g| char::from_u32(g.unicode))
-            .collect()
+            .collect();
+        s.nfc().collect()
     }
 }
 
@@ -555,7 +517,6 @@ mod tests {
         let engine = BengaliEngine::from_layout_str("phonetic");
         assert!(engine.is_some());
         assert_eq!(engine.unwrap().get_state().layout, LayoutType::Phonetic);
-
         let invalid = BengaliEngine::from_layout_str("invalid");
         assert!(invalid.is_none());
     }
@@ -566,7 +527,6 @@ mod tests {
         let event = KeyEvent::down(29, 'a' as u32);
         let result = engine.process_key(event);
         assert!(result.is_ok());
-
         let actions = result.unwrap();
         assert_eq!(actions.len(), 1);
     }
@@ -575,7 +535,6 @@ mod tests {
     fn test_backspace_key() {
         let mut engine = BengaliEngine::new(LayoutType::English);
         engine.process_key(KeyEvent::down(29, 'a' as u32)).unwrap();
-
         let actions = engine.process_key(KeyEvent::down(67, 0)).unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0], OutputAction::Backspace(1));
@@ -600,11 +559,9 @@ mod tests {
     #[test]
     fn test_shift_toggle() {
         let mut engine = BengaliEngine::new(LayoutType::English);
-
         let actions = engine.process_key(KeyEvent::down(59, 0)).unwrap();
         assert_eq!(actions[0], OutputAction::Nothing);
         assert_eq!(engine.get_state().shift_state, ShiftState::Shift);
-
         let actions = engine.process_key(KeyEvent::down(59, 0)).unwrap();
         assert_eq!(actions[0], OutputAction::Nothing);
         assert_eq!(engine.get_state().shift_state, ShiftState::None);
@@ -615,7 +572,6 @@ mod tests {
         let mut engine = BengaliEngine::new(LayoutType::English);
         engine.process_key(KeyEvent::down(29, 'a' as u32)).unwrap();
         engine.process_key(KeyEvent::down(30, 'b' as u32)).unwrap();
-
         engine.reset();
         assert!(engine.get_state().composition_buffer.is_empty());
         assert_eq!(engine.get_state().cursor_position, 0);
@@ -625,7 +581,6 @@ mod tests {
     fn test_set_layout() {
         let mut engine = BengaliEngine::new(LayoutType::Phonetic);
         assert_eq!(engine.get_state().layout, LayoutType::Phonetic);
-
         engine.set_layout(LayoutType::English);
         assert_eq!(engine.get_state().layout, LayoutType::English);
     }
@@ -634,7 +589,6 @@ mod tests {
     fn test_incognito_mode() {
         let mut engine = BengaliEngine::new(LayoutType::English);
         assert!(!engine.is_incognito());
-
         engine.set_incognito(true);
         assert!(engine.is_incognito());
     }
@@ -643,9 +597,37 @@ mod tests {
     fn test_conjunct_table_loaded() {
         let engine = BengaliEngine::new(LayoutType::Phonetic);
         let conjuncts = engine.get_conjuncts();
-
         assert!(conjuncts.is_consonant('ক'));
         assert!(conjuncts.is_consonant('খ'));
         assert!(!conjuncts.is_consonant('া'));
+    }
+
+    #[test]
+    fn test_phonetic_transliteration() {
+        let mut engine = BengaliEngine::new(LayoutType::Phonetic);
+        // "ami" -> "আমি"
+        for ch in "ami".chars() {
+            engine.process_key(KeyEvent::from_char(ch)).unwrap();
+        }
+        let text = engine.composition_to_string();
+        assert_eq!(text, "আমি");
+    }
+
+    #[test]
+    fn test_grapheme_backspace() {
+        let mut engine = BengaliEngine::new(LayoutType::English);
+        // Simulate typing ক্ষ (which is 3 codepoints but 1 grapheme)
+        // We'll directly push graphemes
+        engine.process_key(KeyEvent::down(29, 'q' as u32)).unwrap(); // not relevant
+        // Instead test via direct buffer
+        engine.state.composition_buffer.clear();
+        for ch in "ক্ষ".chars() {
+            engine.add_to_buffer(ch);
+        }
+        engine.state.current_word = "ক্ষ".to_string();
+        let actions = engine.process_key(KeyEvent::down(67, 0)).unwrap();
+        // Should delete whole grapheme "ক্ষ" -> 3 codepoints
+        assert_eq!(actions[0], OutputAction::Backspace(3));
+        assert!(engine.state.composition_buffer.is_empty());
     }
 }
