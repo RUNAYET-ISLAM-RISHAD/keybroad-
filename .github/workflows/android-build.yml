@@ -19,8 +19,13 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          target: aarch64-linux-android
           override: true
+          target: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+          link-to-sdk: true
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
       - name: Build Rust Core
