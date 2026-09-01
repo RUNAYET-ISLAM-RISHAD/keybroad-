@@ -1,5 +1,6 @@
 package com.keybroad.ui
 
+import android.app.AlertDialog
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,6 +30,11 @@ class MainActivity : ComponentActivity() {
 
         // Check for updates on launch (in background)
         updateChecker.checkForUpdate()
+
+        // Handle signature-mismatch bootstrap request (from UpdateInstallReceiver)
+        if (intent.getBooleanExtra("bootstrap_required", false)) {
+            showBootstrapDialog(intent.getStringExtra("bootstrap_details") ?: "")
+        }
 
         setContent {
             KeybroadTheme {
@@ -87,5 +93,30 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         updateChecker.onDestroy()
+    }
+
+    /**
+     * One-time bootstrap dialog: the installed build has a legacy signature.
+     * Uninstall + reinstall the stable-key APK; after that all OTA updates
+     * install automatically without signature conflicts.
+     */
+    private fun showBootstrapDialog(details: String) {
+        AlertDialog.Builder(this)
+            .setTitle("One-Time Update Step")
+            .setMessage(
+                "Your installed version uses an old signing key that cannot be " +
+                "updated directly.\n\n" +
+                "1. Uninstall the current app\n" +
+                "2. Download and install the new version from:\n" +
+                "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/latest\n\n" +
+                "After this one-time step, all future updates will install " +
+                "automatically.\n\n($details)"
+            )
+            .setPositiveButton("Open Download Page") { _, _ ->
+                updateManager.uninstallForBootstrap()
+            }
+            .setNegativeButton("Later") { d, _ -> d.dismiss() }
+            .setCancelable(false)
+            .show()
     }
 }

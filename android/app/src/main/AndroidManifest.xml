@@ -33,10 +33,10 @@
         </provider>
 
         <receiver
-            android:name=".update.DownloadCompleteReceiver"
+            android:name=".update.UpdateInstallReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+                <action android:name="com.keybroad.update.INSTALL_STATUS" />
             </intent-filter>
         </receiver>
 

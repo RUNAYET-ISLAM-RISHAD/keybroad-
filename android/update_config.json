@@ -1,6 +1,7 @@
 {
-  "version": "1.1.0",
-  "version_code": 5,
-  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.1.0/app-debug.apk",
-  "changelog": "Smart Bengali keyboard: Bengali-first visual layout, join mode (যুক্ত), smart kar (কার), context-aware suggestions, grapheme-aware editing, conjunct dictionary"
+  "version": "1.1.1",
+  "version_code": 6,
+  "package_name": "com.keybroad",
+  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.1.1/app-release.apk",
+  "changelog": "Stable signing key: fixes 'App not installed' errors forever. PackageInstaller-based OTA updates. Future updates install automatically."
 }

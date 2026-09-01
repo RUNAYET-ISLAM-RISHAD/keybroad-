@@ -5,6 +5,14 @@ plugins {
 
 def compose_version = '1.5.4'
 
+// Stable signing: load from keystore.properties if present (CI/local),
+// otherwise fall back to debug keystore (plain dev builds without the file).
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
     namespace 'com.keybroad'
     compileSdk 34
@@ -13,8 +21,19 @@ android {
         applicationId "com.keybroad"
         minSdk 26
         targetSdk 34
-        versionCode 5
-        versionName '1.0.3'
+        versionCode 6
+        versionName '1.1.1'
+    }
+
+    signingConfigs {
+        stable {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
     }
 
     buildFeatures {
@@ -32,6 +51,20 @@ android {
 
     kotlinOptions {
         jvmTarget = '17'
+    }
+
+    buildTypes {
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.stable
+            }
+        }
+        release {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.stable
+            }
+            minifyEnabled false
+        }
     }
 }
 
