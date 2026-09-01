@@ -31,26 +31,22 @@ pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeProcessKey(
     }
     let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
     
-    let key_event = KeyEvent::down(key_code as u32, key_code as u32);
-    let actions = engine.process_key(key_event).unwrap_or_default();
-    
-    let mut result = String::new();
-    for action in actions {
-        match action {
-            OutputAction::CommitText(text) => result.push_str(&text),
-            OutputAction::Backspace(count) => {
-                for _ in 0..count {
-                    result.pop();
-                }
-            }
-            OutputAction::UpdateComposition(glyphs) => {
-                for glyph in glyphs {
-                    result.push(char::from_u32(glyph.unicode).unwrap_or('?'));
-                }
-            }
-            _ => {}
-        }
+    // Handle shift/caps for this key press
+    let was_shift = engine.get_state().shift_state;
+    if is_shift {
+        engine.get_state_mut().shift_state = crate::types::ShiftState::Shift;
+    } else if _is_caps {
+        engine.get_state_mut().shift_state = crate::types::ShiftState::CapsLock;
     }
+    let key_event = KeyEvent::down(key_code as u32, key_code as u32);
+    let _ = engine.process_key(key_event);
+    // Reset shift if it was temporary
+    if is_shift && was_shift == crate::types::ShiftState::None {
+        engine.get_state_mut().shift_state = crate::types::ShiftState::None;
+    }
+    
+    // Return full composition text (NFC normalized) - fixes typing bug where delta was returned
+    let result = engine.get_text();
     
     let output = env.new_string(&result).unwrap();
     output.into_raw()
@@ -67,8 +63,8 @@ pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeGetSuggestions(
         return empty_array.into_raw();
     }
     let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
-    let current_word = "";
-    let suggestions: Vec<CandidateWord> = engine.get_suggestions(current_word);
+    let current_text = engine.get_text();
+    let suggestions: Vec<CandidateWord> = engine.get_suggestions(&current_text);
     let mut string_array = env.new_object_array(
         suggestions.len() as i32,
         "java/lang/String",
@@ -76,6 +72,43 @@ pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeGetSuggestions(
     ).unwrap();
     for (i, s) in suggestions.iter().enumerate() {
         let jstr = env.new_string(&s.word).unwrap();
+        env.set_object_array_element(&string_array, i as i32, JObject::from(jstr)).unwrap();
+    }
+    string_array.into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeIsJoinMode(
+    env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+) -> bool {
+    if ptr == 0 {
+        return false;
+    }
+    let engine = unsafe { &*(ptr as *mut BengaliEngine) };
+    engine.is_join_mode()
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeGetJoinSuggestions(
+    mut env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+) -> jobjectArray {
+    if ptr == 0 {
+        let empty_array = env.new_object_array(0, "java/lang/String", JObject::null()).unwrap();
+        return empty_array.into_raw();
+    }
+    let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
+    let suggestions = engine.get_join_suggestions();
+    let mut string_array = env.new_object_array(
+        suggestions.len() as i32,
+        "java/lang/String",
+        JObject::null(),
+    ).unwrap();
+    for (i, s) in suggestions.iter().enumerate() {
+        let jstr = env.new_string(s).unwrap();
         env.set_object_array_element(&string_array, i as i32, JObject::from(jstr)).unwrap();
     }
     string_array.into_raw()

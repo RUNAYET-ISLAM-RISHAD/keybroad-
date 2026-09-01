@@ -7,7 +7,7 @@ import org.json.JSONObject
 import java.io.IOException
 
 data class KeyData(
-    val key: String,
+    val key: String, // Logical ID (QWERTY)
     val output: String,
     val shiftOutput: String,
     val display: String
@@ -22,6 +22,29 @@ data class LayoutData(
 class LayoutManager(private val context: Context) {
 
     private val layouts = mutableMapOf<String, LayoutData>()
+
+    // Base Bengali visual layout (identical across all layouts)
+    // Rows as per spec: Vowels, Ka-varga, etc.
+    fun getBaseVisualLayout(): LayoutData {
+        val baseKeys = listOf(
+            // Row1: Vowels অ আ ই ঈ উ ঊ এ ঐ ও ঔ (logical q-p)
+            KeyData("q", "অ", "অ", "অ"), KeyData("w", "আ", "আ", "আ"), KeyData("e", "ই", "ই", "ই"), KeyData("r", "ঈ", "ঈ", "ঈ"), KeyData("t", "উ", "উ", "উ"),
+            KeyData("y", "ঊ", "ঊ", "ঊ"), KeyData("u", "এ", "এ", "এ"), KeyData("i", "ঐ", "ঐ", "ঐ"), KeyData("o", "ও", "ও", "ও"), KeyData("p", "ঔ", "ঔ", "ঔ"),
+            // Row2: ক খ গ ঘ ঙ চ ছ জ ঝ ঞ (logical a-;)
+            KeyData("a", "ক", "ক", "ক"), KeyData("s", "খ", "খ", "খ"), KeyData("d", "গ", "গ", "গ"), KeyData("f", "ঘ", "ঘ", "ঘ"), KeyData("g", "ঙ", "ঙ", "ঙ"),
+            KeyData("h", "চ", "চ", "চ"), KeyData("j", "ছ", "ছ", "ছ"), KeyData("k", "জ", "জ", "জ"), KeyData("l", "ঝ", "ঝ", "ঝ"), KeyData(";", "ঞ", "ঞ", "ঞ"),
+            // Row3: ট ঠ ড ঢ ণ ত থ দ ধ ন (logical z-/)
+            KeyData("z", "ট", "ট", "ট"), KeyData("x", "ঠ", "ঠ", "ঠ"), KeyData("c", "ড", "ড", "ড"), KeyData("v", "ঢ", "ঢ", "ঢ"), KeyData("b", "ণ", "ণ", "ণ"),
+            KeyData("n", "ত", "ত", "ত"), KeyData("m", "থ", "থ", "থ"), KeyData(",", "দ", "দ", "দ"), KeyData(".", "ধ", "ধ", "ধ"), KeyData("/", "ন", "ন", "ন"),
+            // Row4: প ফ ব ভ ম য র ল শ ষ (logical Q-P)
+            KeyData("Q", "প", "প", "প"), KeyData("W", "ফ", "ফ", "ফ"), KeyData("E", "ব", "ব", "ব"), KeyData("R", "ভ", "ভ", "ভ"), KeyData("T", "ম", "ম", "ম"),
+            KeyData("Y", "য", "য", "য"), KeyData("U", "র", "র", "র"), KeyData("I", "ল", "ল", "ল"), KeyData("O", "শ", "শ", "শ"), KeyData("P", "ষ", "ষ", "ষ"),
+            // Row5: স হ ড় ঢ় য় ক্ষ জ্ঞ ৎ ং/ঁ (logical A-L)
+            KeyData("A", "স", "স", "স"), KeyData("S", "হ", "হ", "হ"), KeyData("D", "ড়", "ড়", "ড়"), KeyData("F", "ঢ়", "ঢ়", "ঢ়"), KeyData("G", "য়", "য়", "য়"),
+            KeyData("H", "ক্ষ", "ক্ষ", "ক্ষ"), KeyData("J", "জ্ঞ", "জ্ঞ", "জ্ঞ"), KeyData("K", "ৎ", "ৎ", "ৎ"), KeyData("L", "ং", "ঁ", "ং")
+        )
+        return LayoutData("base", "Base Bengali", baseKeys)
+    }
 
     fun loadLayout(layoutName: String): LayoutData {
         layouts[layoutName.lowercase()]?.let { return it }
@@ -42,26 +65,20 @@ class LayoutManager(private val context: Context) {
 
     private fun parseLayout(json: String, defaultName: String): LayoutData {
         val trimmed = json.trim()
-
-        // Handle JSON array format: [{"key":"q","output":"ধ"}, ...]
         if (trimmed.startsWith("[")) {
             return parseArrayLayout(trimmed, defaultName)
         }
-
-        // Handle JSON object format (legacy): {"layout_id":"phonetic","keys":{...}}
         return parseObjectLayout(trimmed, defaultName)
     }
 
     private fun parseArrayLayout(json: String, defaultName: String): LayoutData {
         val arr = JSONArray(json)
         val keys = mutableListOf<KeyData>()
-
         for (i in 0 until arr.length()) {
             val obj = arr.getJSONObject(i)
             val key = obj.getString("key")
             val output = obj.getString("output")
             val shiftOutput = obj.optString("shift_output", output)
-
             keys.add(KeyData(
                 key = key,
                 output = output,
@@ -69,7 +86,6 @@ class LayoutManager(private val context: Context) {
                 display = output
             ))
         }
-
         return LayoutData(defaultName.lowercase(), defaultName, keys)
     }
 
@@ -78,7 +94,6 @@ class LayoutManager(private val context: Context) {
         val layoutId = jsonObj.optString("layout_id", defaultName.lowercase())
         val name = jsonObj.optString("name", defaultName)
         val keysObj = jsonObj.optJSONObject("keys") ?: JSONObject()
-
         val keys = mutableListOf<KeyData>()
         keysObj.keys().forEach { key ->
             val keyObj = keysObj.getJSONObject(key)
@@ -91,17 +106,15 @@ class LayoutManager(private val context: Context) {
                 display = output
             ))
         }
-
         return LayoutData(layoutId, name, keys)
     }
 
     private fun getDefaultLayout(): LayoutData {
-        return LayoutData("phonetic", "Phonetic", emptyList())
+        return getBaseVisualLayout()
     }
 
     companion object {
         private var instance: LayoutManager? = null
-
         fun getInstance(context: Context): LayoutManager {
             return instance ?: LayoutManager(context.applicationContext).also { instance = it }
         }

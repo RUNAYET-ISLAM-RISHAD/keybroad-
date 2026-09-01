@@ -67,6 +67,15 @@ class MainActivity : ComponentActivity() {
                             },
                             onSpecialKey = { keyCode ->
                                 viewModel.processSpecialKey(keyCode)
+                            },
+                            suggestions = state.suggestions,
+                            isJoinMode = state.isJoinMode,
+                            showKarPopup = state.showKarPopup,
+                            onSelectKar = { kar ->
+                                viewModel.selectKar(kar)
+                            },
+                            onSelectSuggestion = { suggestion ->
+                                viewModel.selectSuggestion(suggestion)
                             }
                         )
                     }

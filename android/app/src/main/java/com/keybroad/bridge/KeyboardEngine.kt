@@ -37,6 +37,28 @@ class KeyboardEngine : AutoCloseable {
         }
     }
 
+    fun isJoinMode(): Boolean {
+        if (nativePtr == 0L) return false
+        return try {
+            nativeIsJoinMode(nativePtr)
+        } catch (e: UnsatisfiedLinkError) {
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun getJoinSuggestions(): Array<String> {
+        if (nativePtr == 0L) return emptyArray()
+        return try {
+            nativeGetJoinSuggestions(nativePtr)
+        } catch (e: UnsatisfiedLinkError) {
+            emptyArray()
+        } catch (e: Exception) {
+            emptyArray()
+        }
+    }
+
     fun switchLayout(layoutName: String) {
         if (nativePtr == 0L) return
         try {
@@ -65,6 +87,8 @@ class KeyboardEngine : AutoCloseable {
     private external fun nativeInit(): Long
     private external fun nativeProcessKey(ptr: Long, keyCode: Int, isShift: Boolean, isCaps: Boolean): String
     private external fun nativeGetSuggestions(ptr: Long): Array<String>
+    private external fun nativeIsJoinMode(ptr: Long): Boolean
+    private external fun nativeGetJoinSuggestions(ptr: Long): Array<String>
     private external fun nativeSwitchLayout(ptr: Long, layoutName: String)
     private external fun nativeDestroy(ptr: Long)
 }

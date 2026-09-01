@@ -579,3 +579,50 @@ fn test_backspace_after_consonant_clears_base() {
     let actions = engine.process_key(KeyEvent::from_char('/')).unwrap();
     assert_eq!(actions[0], OutputAction::CommitText("\u{09CD}".to_string())); // ্
 }
+
+// === Join Mode (য়ুত্ key) Tests ===
+
+#[test]
+fn test_join_key_conjunct_formation() {
+    // k + join + l = ক্ল
+    let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
+    engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap(); // ক
+    engine.process_key(KeyEvent::down(100, 100)).unwrap(); // join
+    assert!(engine.is_join_mode());
+    engine.process_key(KeyEvent::down(76, 'l' as u32)).unwrap(); // ল
+    let text = engine.get_text();
+    assert!(text.contains("\u{0995}\u{09CD}\u{09B2}")); // ক্ল
+}
+
+#[test]
+fn test_join_mode_exits_on_vowel() {
+    let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
+    engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap();
+    engine.process_key(KeyEvent::down(100, 100)).unwrap();
+    assert!(engine.is_join_mode());
+    // Vowel (a) exits join mode
+    engine.process_key(KeyEvent::down(65, 'a' as u32)).unwrap();
+    assert!(!engine.is_join_mode());
+}
+
+#[test]
+fn test_join_mode_suggestions() {
+    let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
+    engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap(); // ক
+    engine.process_key(KeyEvent::down(100, 100)).unwrap(); // join
+    assert!(engine.is_join_mode());
+    let suggestions = engine.get_join_suggestions();
+    assert!(!suggestions.is_empty());
+    // Should suggest conjuncts starting with ক
+    assert!(suggestions.iter().any(|s| s.starts_with("\u{0995}")));
+}
+
+#[test]
+fn test_reset_clears_join_mode() {
+    let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
+    engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap();
+    engine.process_key(KeyEvent::down(100, 100)).unwrap();
+    assert!(engine.is_join_mode());
+    engine.reset();
+    assert!(!engine.is_join_mode());
+}

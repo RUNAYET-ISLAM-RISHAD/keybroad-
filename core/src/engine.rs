@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::conjunct::ConjunctTable;
+use crate::conjunct_engine::ConjunctEngine;
 use crate::dictionary::Dictionary;
 use crate::layout::load_layout;
 use crate::ngram::NgramModel;
@@ -20,6 +21,7 @@ pub struct BengaliEngine {
     ngram: NgramModel,
     user_words: HashSet<String>,
     phonetic: PhoneticEngine,
+    conjunct_engine: ConjunctEngine,
 }
 
 impl BengaliEngine {
@@ -44,6 +46,7 @@ impl BengaliEngine {
             ngram: NgramModel::load_embedded(),
             user_words: HashSet::new(),
             phonetic: PhoneticEngine::new(),
+            conjunct_engine: ConjunctEngine::new(),
         }
     }
 
@@ -70,6 +73,20 @@ impl BengaliEngine {
                 };
                 return Ok(vec![OutputAction::Nothing]);
             }
+            100 if self.state.layout != LayoutType::English => {
+                // য়ুত্ (join) key: capture last consonant
+                if !self.state.composition_buffer.is_empty() {
+                    let last_unicode = self.state.composition_buffer[self.state.composition_buffer.len() - 1].unicode;
+                    self.conjunct_engine.start_join(last_unicode);
+                } else {
+                    self.conjunct_engine.enter_join_mode();
+                }
+                return Ok(vec![OutputAction::Nothing]);
+            }
+            101 if self.state.layout != LayoutType::English => {
+                // কাত key - handled as popup, just return
+                return Ok(vec![OutputAction::Nothing]);
+            }
             _ => {}
         }
 
@@ -88,6 +105,13 @@ impl BengaliEngine {
             }
             if self.state.shift_state == ShiftState::Shift {
                 self.state.shift_state = ShiftState::None;
+            }
+            // Join mode: exit on vowel input (aeiou) or non-alphabetic chars
+            if self.conjunct_engine.is_join_pending() {
+                let is_vowel = matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u');
+                if is_vowel || !ch.is_ascii_alphabetic() {
+                    self.conjunct_engine.reset();
+                }
             }
             // Handle word boundary via phonetic engine
             let is_boundary = WORD_BOUNDARY_CHARS.contains(&ch);
@@ -167,6 +191,51 @@ impl BengaliEngine {
 
     fn process_single_char(&mut self, ch: char) -> Result<Vec<OutputAction>, EngineError> {
         let mut actions = Vec::new();
+        // Handle Join Mode for conjuncts (যুক্ত key)
+        let is_bengali_layout = self.state.layout != LayoutType::English;
+        if is_bengali_layout && self.conjunct_engine.is_join_pending() && self.conjuncts.is_consonant(ch) {
+            // In join mode, next consonant forms conjunct with previous cluster
+            // Remove previous cluster's last grapheme and form new conjunct
+            let _prev_len = self.conjunct_engine.get_state().clone();
+            // For now, use conjunct_engine to form conjunct
+            if let Some(conjunct) = self.conjunct_engine.push_consonant(ch) {
+                // Need to backspace the previous consonant(s) that are being joined
+                // For simplicity, pop last grapheme(s) and push conjunct
+                let text = self.composition_to_string();
+                let graphemes: Vec<&str> = text.graphemes(true).collect();
+                if !graphemes.is_empty() {
+                    // Pop last grapheme (previous consonant) - but for multi-conjunct like ক + যুক্ত + ত + র -> need to handle
+                    // For first join, pop one, for subsequent, the conjunct already includes previous, so we need to pop correctly
+                    // Simplify: pop one grapheme for first join, for multi, the conjunct_engine's cluster length determines
+                    let to_pop = 1; // For first join, pop one previous char
+                    for _ in 0..to_pop {
+                        // Find grapheme length to pop
+                        let current_text = self.composition_to_string();
+                        let cur_graphemes: Vec<&str> = current_text.graphemes(true).collect();
+                        if let Some(last) = cur_graphemes.last() {
+                            let len = last.chars().count() as u32;
+                            for _ in 0..len {
+                                self.state.composition_buffer.pop();
+                            }
+                            actions.push(OutputAction::Backspace(len));
+                            self.state.current_word = self.state.current_word.graphemes(true).collect::<Vec<&str>>()[..self.state.current_word.graphemes(true).count()-1].concat();
+                        }
+                    }
+                }
+                let normalized: String = conjunct.nfc().collect();
+                actions.push(OutputAction::CommitText(normalized.clone()));
+                for c in normalized.chars() {
+                    self.add_to_buffer(c);
+                }
+                self.state.current_word.push_str(&normalized);
+                // Stay in join active for next consonant, unless vowel comes
+                return Ok(actions);
+            }
+        } else if self.conjunct_engine.is_join_pending() && Self::is_vowel_sign(ch) {
+            // Vowel exits join mode
+            self.conjunct_engine.push_vowel();
+        }
+
         // Smart kar handling: if ch is vowel sign and last char in buffer is also vowel sign, replace
         if Self::is_vowel_sign(ch) {
             if let Some(last) = self.state.composition_buffer.last() {
@@ -181,6 +250,8 @@ impl BengaliEngine {
                     }
                 }
             }
+            // Also exit join mode on vowel
+            self.conjunct_engine.push_vowel();
         }
 
         if ConjunctTable::is_hasanta(ch) {
@@ -331,6 +402,18 @@ impl BengaliEngine {
         actions
     }
 
+    pub fn get_text(&self) -> String {
+        self.composition_to_string()
+    }
+
+    pub fn is_join_mode(&self) -> bool {
+        self.conjunct_engine.is_join_pending()
+    }
+
+    pub fn get_join_suggestions(&mut self) -> Vec<String> {
+        self.conjunct_engine.get_suggestions_for_join()
+    }
+
     pub fn get_state(&self) -> &EngineState {
         &self.state
     }
@@ -351,6 +434,7 @@ impl BengaliEngine {
         self.state.history.clear();
         self.state.last_committed_word = None;
         self.phonetic.reset();
+        self.conjunct_engine.reset();
     }
 
     pub fn set_layout(&mut self, layout: LayoutType) {
