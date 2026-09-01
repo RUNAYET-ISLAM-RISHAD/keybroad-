@@ -1,0 +1,47 @@
+# === Rust / Cargo ===
+/target/
+target/
+core/target/
+**/target/
+**/*.rs.bk
+Cargo.lock
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Android ===
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.hprof
+android/captures/
+
+# === iOS ===
+ios/build/
+ios/DerivedData/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+ios/Pods/
+
+# === Server ===
+server/node_modules/
+server/dist/
+server/.env
+server/*.log
+
+# === OS ===
+.DS_Store
+desktop.ini
+ehthumbs.db
+
+# === Temporary ===
+*.tmp
+*.bak
+*.orig
