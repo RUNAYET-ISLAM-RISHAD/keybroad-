@@ -13,11 +13,9 @@ import kotlinx.coroutines.launch
 data class KeyboardState(
     val text: String = "",
     val suggestions: List<String> = emptyList(),
-    val currentLayout: String = "Phonetic",
     val keys: List<KeyData> = emptyList(),
-    val isShift: Boolean = false,
-    val isJoinMode: Boolean = false,
-    val showKarPopup: Boolean = false
+    val isEnglishMode: Boolean = false, // false = Bangla Avro, true = English
+    val isShift: Boolean = false
 )
 
 class KeyboardViewModel(application: Application) : AndroidViewModel(application) {
@@ -26,44 +24,57 @@ class KeyboardViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(KeyboardState())
     val state: StateFlow<KeyboardState> = _state
 
-    init {
-        loadLayout("Phonetic")
-    }
+    // Small English word list for English-mode suggestions
+    private val englishWords = listOf(
+        "hello", "help", "held", "helium", "helm",
+        "hero", "her", "here", "hey", "he",
+        "how", "house", "home", "hope", "happy",
+        "world", "word", "work", "well", "we",
+        "you", "your", "yes", "yet",
+        "the", "this", "that", "there", "they"
+    )
 
-    private fun loadLayout(layoutName: String) {
-        val layoutData = layoutManager.loadLayout(layoutName)
-        val isBengali = layoutName != "Phonetic" && layoutName != "English"
-        _state.value = _state.value.copy(
-            currentLayout = layoutName,
-            keys = layoutData.keys,
-            isShift = false,
-            isJoinMode = false
-        )
+    init {
+        // Gboard-style: always Roman QWERTY keys, engine starts in Bangla Avro (Phonetic)
+        val keys = layoutManager.getRomanKeys()
+        _state.value = KeyboardState(keys = keys, isEnglishMode = false)
+        engine.switchLayout("Phonetic")
         refreshSuggestions()
     }
 
     private fun refreshSuggestions() {
-        // Sync join mode with engine state
-        val isJoinMode = engine.isJoinMode()
-        val suggestions = if (isJoinMode) {
-            engine.getJoinSuggestions().toList()
+        val suggestions = if (_state.value.isEnglishMode) {
+            val lastWord = _state.value.text.split(" ", "\n").lastOrNull()?.lowercase() ?: ""
+            if (lastWord.length >= 2) {
+                englishWords.filter { it.startsWith(lastWord) }.take(3)
+            } else if (lastWord.length == 1) {
+                englishWords.filter { it.startsWith(lastWord) }.take(3)
+            } else {
+                emptyList()
+            }
         } else {
+            // Bangla Avro: Bengali suggestions from engine (current_word via JNI)
             engine.getSuggestions().toList()
         }
-        _state.value = _state.value.copy(
-            suggestions = suggestions,
-            isJoinMode = isJoinMode
-        )
+        // Also include join suggestions in Bangla if needed (kept for compatibility)
+        _state.value = _state.value.copy(suggestions = suggestions)
+    }
+
+    fun toggleLanguage() {
+        viewModelScope.launch {
+            val newMode = !_state.value.isEnglishMode
+            engine.switchLayout(if (newMode) "English" else "Phonetic")
+            _state.value = _state.value.copy(isEnglishMode = newMode, isShift = false)
+            refreshSuggestions()
+        }
     }
 
     fun processKey(keyData: KeyData, isShift: Boolean = false, isCaps: Boolean = false) {
         viewModelScope.launch {
             val effectiveShift = isShift || _state.value.isShift
-            // CRITICAL: Send LOGICAL KEY ID (Roman Q/W/E/R), NOT Bengali unicode.
-            // Engine maps logical ID via active layout profile.
             val keyCode = if (keyData.key == "space") 32 else keyData.key[0].code
+            // Engine handles both layouts: Phonetic (Avro -> Bengali) and English (direct)
             val newText = engine.processKey(keyCode, effectiveShift, isCaps)
-            // Engine is single source of truth — set full text, don't append
             _state.value = _state.value.copy(
                 text = newText,
                 isShift = if (effectiveShift && !isCaps) false else _state.value.isShift
@@ -80,68 +91,20 @@ class KeyboardViewModel(application: Application) : AndroidViewModel(application
                 refreshSuggestions()
                 return@launch
             }
-            if (keyCode == 1000) {
-                // যুক্ত (join) key — use 1000 to avoid collision with 'd' (100)
-                val newText = engine.processKey(keyCode, false, false)
-                _state.value = _state.value.copy(text = newText)
-                refreshSuggestions()
-                return@launch
-            }
-            if (keyCode == 1001) {
-                // কার key — use 1001 to avoid collision with 'e' (101); toggle popup
-                _state.value = _state.value.copy(showKarPopup = !_state.value.showKarPopup)
-                return@launch
-            }
             // Backspace (67), Enter (66), Space (32)
             val newText = engine.processKey(keyCode, false, false)
+            _state.value = _state.value.copy(text = newText)
             refreshSuggestions()
-            _state.value = _state.value.copy(
-                text = newText,
-                showKarPopup = false
-            )
-        }
-    }
-
-    fun selectKar(kar: String) {
-        viewModelScope.launch {
-            // Direct Bengali char via processChar — bypasses layout lookup,
-            // handled by smart kar system in engine.
-            val newText = engine.processChar(kar[0].code)
-            _state.value = _state.value.copy(
-                text = newText,
-                showKarPopup = false
-            )
-            refreshSuggestions()
-        }
-    }
-
-    fun dismissKarPopup() {
-        _state.value = _state.value.copy(showKarPopup = false)
-    }
-
-    fun switchLayout(layoutName: String) {
-        viewModelScope.launch {
-            engine.switchLayout(layoutName)
-            loadLayout(layoutName)
         }
     }
 
     fun selectSuggestion(suggestion: String) {
         viewModelScope.launch {
-            if (_state.value.isJoinMode) {
-                // Join mode: suggestion is a conjunct like "ক্ষ" (ক + ্ + ষ).
-                // Send the final consonant via processChar to complete the conjunct.
-                val lastChar = suggestion.last()
-                val newText = engine.processChar(lastChar.code)
-                _state.value = _state.value.copy(text = newText)
-                refreshSuggestions()
-            } else {
-                // Normal mode: let engine replace current partial word with full suggestion.
-                // Engine handles buffer update; UI displays engine's full text.
-                val newText = engine.applySuggestion(suggestion)
-                _state.value = _state.value.copy(text = newText)
-                refreshSuggestions()
-            }
+            // Let engine replace current partial word with full suggestion (Bengali)
+            // For English mode we also go through engine so state stays consistent
+            val newText = engine.applySuggestion(suggestion)
+            _state.value = _state.value.copy(text = newText)
+            refreshSuggestions()
         }
     }
 

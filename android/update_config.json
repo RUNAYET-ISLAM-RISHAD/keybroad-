@@ -1,7 +1,7 @@
 {
-  "version": "1.4.0",
-  "version_code": 11,
+  "version": "1.5.0",
+  "version_code": 12,
   "package_name": "com.keybroad",
-  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.4.0/app-release.apk",
-  "changelog": "Fixed typing and OTA bootstrap"
+  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.5.0/app-release.apk",
+  "changelog": "Gboard-style UI with English + Avro Bangla dual mode"
 }
