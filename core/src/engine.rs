@@ -73,8 +73,8 @@ impl BengaliEngine {
                 };
                 return Ok(vec![OutputAction::Nothing]);
             }
-            100 if self.state.layout != LayoutType::English => {
-                // য়ুত্ (join) key: capture last consonant
+            1000 if self.state.layout != LayoutType::English => {
+                // যুক্ত (join) key: capture last consonant
                 if !self.state.composition_buffer.is_empty() {
                     let last_unicode = self.state.composition_buffer[self.state.composition_buffer.len() - 1].unicode;
                     self.conjunct_engine.start_join(last_unicode);
@@ -83,8 +83,8 @@ impl BengaliEngine {
                 }
                 return Ok(vec![OutputAction::Nothing]);
             }
-            101 if self.state.layout != LayoutType::English => {
-                // কাত key - handled as popup, just return
+            1001 if self.state.layout != LayoutType::English => {
+                // কার key - handled as popup, just return
                 return Ok(vec![OutputAction::Nothing]);
             }
             _ => {}
@@ -406,12 +406,77 @@ impl BengaliEngine {
         self.composition_to_string()
     }
 
+    /// Direct Bengali character input for kar popup and suggestion completion.
+    /// Bypasses layout lookup and phonetic transliteration, handling the
+    /// character directly via process_single_char (smart kar, join mode, etc.).
+    pub fn process_char(&mut self, ch: char) -> Vec<OutputAction> {
+        // Word boundary handling
+        if WORD_BOUNDARY_CHARS.contains(&ch) {
+            self.finalize_current_word();
+        }
+        let actions = match self.process_single_char(ch) {
+            Ok(a) => a,
+            Err(_) => vec![OutputAction::Nothing],
+        };
+        if !WORD_BOUNDARY_CHARS.contains(&ch) {
+            self.state.current_word.push(ch);
+        }
+        actions
+    }
+
+    /// Apply a full-word suggestion, replacing the current partial word.
+    /// Engine remains single source of truth; UI must set text = get_text().
+    pub fn apply_suggestion(&mut self, suggestion: &str) -> Vec<OutputAction> {
+        let normalized: String = suggestion.nfc().collect();
+        let current = self.state.current_word.clone();
+        // Remove current_word graphemes from buffer tail (if present)
+        if !current.is_empty() {
+            let cur_graphemes: Vec<&str> = current.graphemes(true).collect();
+            let buf_text = self.composition_to_string();
+            if buf_text.ends_with(&current) {
+                for g in cur_graphemes.iter().rev() {
+                    let len = g.chars().count() as usize;
+                    for _ in 0..len {
+                        self.state.composition_buffer.pop();
+                    }
+                }
+            } else {
+                // Fallback: pop by grapheme count
+                for _ in 0..cur_graphemes.len() {
+                    // pop one grapheme (variable codepoints)
+                    let txt = self.composition_to_string();
+                    let gs: Vec<&str> = txt.graphemes(true).collect();
+                    if let Some(last) = gs.last() {
+                        let l = last.chars().count() as usize;
+                        for _ in 0..l {
+                            self.state.composition_buffer.pop();
+                        }
+                    }
+                }
+            }
+            self.state.current_word.clear();
+        }
+        // Append suggestion chars directly (already composed Bengali)
+        for ch in normalized.chars() {
+            self.add_to_buffer(ch);
+            self.state.current_word.push(ch);
+        }
+        // Finalize word and add trailing space
+        self.finalize_current_word();
+        self.add_to_buffer(' ');
+        vec![OutputAction::CommitText(normalized + " ")]
+    }
+
     pub fn is_join_mode(&self) -> bool {
         self.conjunct_engine.is_join_pending()
     }
 
     pub fn get_join_suggestions(&mut self) -> Vec<String> {
         self.conjunct_engine.get_suggestions_for_join()
+    }
+
+    pub fn current_word(&self) -> String {
+        self.state.current_word.clone()
     }
 
     pub fn get_state(&self) -> &EngineState {

@@ -62,7 +62,7 @@ fun KeyboardView(
             onSelectKar = onSelectKar,
             isJoinMode = isJoinMode,
             showKarPopup = showKarPopup,
-            onDismissKarPopup = { onSpecialKey(101) }
+            onDismissKarPopup = { onSpecialKey(1001) }
         )
     }
 }
@@ -262,13 +262,13 @@ fun BottomRow(
         )
         SpecialKeyButton(
             label = "কার",
-            keyCode = 101,
+            keyCode = 1001,
             modifier = Modifier.weight(1f),
             onSpecialKey = onSpecialKey
         )
         SpecialKeyButton(
             label = "যুক্ত",
-            keyCode = 100,
+            keyCode = 1000,
             modifier = Modifier.weight(1f),
             onSpecialKey = onSpecialKey
         )

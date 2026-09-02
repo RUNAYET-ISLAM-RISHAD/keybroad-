@@ -53,6 +53,45 @@ pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeProcessKey(
 }
 
 #[no_mangle]
+pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeProcessChar(
+    env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+    unicode: i32,
+) -> jstring {
+    if ptr == 0 {
+        let output = env.new_string("").unwrap();
+        return output.into_raw();
+    }
+    let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
+    if let Some(ch) = char::from_u32(unicode as u32) {
+        let _ = engine.process_char(ch);
+    }
+    let result = engine.get_text();
+    let output = env.new_string(&result).unwrap();
+    output.into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeApplySuggestion(
+    mut env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+    suggestion: JString,
+) -> jstring {
+    if ptr == 0 {
+        let output = env.new_string("").unwrap();
+        return output.into_raw();
+    }
+    let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
+    let sug: String = env.get_string(&suggestion).unwrap().into();
+    let _ = engine.apply_suggestion(&sug);
+    let result = engine.get_text();
+    let output = env.new_string(&result).unwrap();
+    output.into_raw()
+}
+
+#[no_mangle]
 pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeGetSuggestions(
     mut env: JNIEnv,
     _class: JClass,
@@ -63,8 +102,9 @@ pub extern "C" fn Java_com_keybroad_bridge_KeyboardEngine_nativeGetSuggestions(
         return empty_array.into_raw();
     }
     let engine = unsafe { &mut *(ptr as *mut BengaliEngine) };
-    let current_text = engine.get_text();
-    let suggestions: Vec<CandidateWord> = engine.get_suggestions(&current_text);
+    // Use current_word (partial prefix) for suggestions, not full text
+    let current = engine.current_word();
+    let suggestions: Vec<CandidateWord> = engine.get_suggestions(&current);
     let mut string_array = env.new_object_array(
         suggestions.len() as i32,
         "java/lang/String",

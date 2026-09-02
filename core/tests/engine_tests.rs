@@ -587,7 +587,7 @@ fn test_join_key_conjunct_formation() {
     // k + join + l = ক্ল
     let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
     engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap(); // ক
-    engine.process_key(KeyEvent::down(100, 100)).unwrap(); // join
+    engine.process_key(KeyEvent::down(1000, 1000)).unwrap(); // join
     assert!(engine.is_join_mode());
     engine.process_key(KeyEvent::down(76, 'l' as u32)).unwrap(); // ল
     let text = engine.get_text();
@@ -598,7 +598,7 @@ fn test_join_key_conjunct_formation() {
 fn test_join_mode_exits_on_vowel() {
     let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
     engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap();
-    engine.process_key(KeyEvent::down(100, 100)).unwrap();
+    engine.process_key(KeyEvent::down(1000, 1000)).unwrap();
     assert!(engine.is_join_mode());
     // Vowel (a) exits join mode
     engine.process_key(KeyEvent::down(65, 'a' as u32)).unwrap();
@@ -609,7 +609,7 @@ fn test_join_mode_exits_on_vowel() {
 fn test_join_mode_suggestions() {
     let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
     engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap(); // ক
-    engine.process_key(KeyEvent::down(100, 100)).unwrap(); // join
+    engine.process_key(KeyEvent::down(1000, 1000)).unwrap(); // join
     assert!(engine.is_join_mode());
     let suggestions = engine.get_join_suggestions();
     assert!(!suggestions.is_empty());
@@ -621,7 +621,7 @@ fn test_join_mode_suggestions() {
 fn test_reset_clears_join_mode() {
     let mut engine = keybroad_core::BengaliEngine::new(keybroad_core::LayoutType::Phonetic);
     engine.process_key(KeyEvent::down(75, 'k' as u32)).unwrap();
-    engine.process_key(KeyEvent::down(100, 100)).unwrap();
+    engine.process_key(KeyEvent::down(1000, 1000)).unwrap();
     assert!(engine.is_join_mode());
     engine.reset();
     assert!(!engine.is_join_mode());
