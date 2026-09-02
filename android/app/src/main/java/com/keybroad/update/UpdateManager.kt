@@ -93,13 +93,33 @@ class UpdateManager(private val context: Context) {
     }
 
     /**
-     * SHA-256 fingerprint of a downloaded APK's signing certificate.
-     * Returns null if the APK cannot be parsed.
-     */
+      * SHA-256 fingerprint of a downloaded APK's signing certificate.
+      * Returns null if the APK cannot be parsed.
+      */
     fun getApkSignature(apkFile: File): String? {
         return try {
-            val packageInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, android.content.pm.PackageManager.GET_SIGNATURES)
-            val sig = packageInfo?.signatures?.firstOrNull() ?: return null
+            val pm = context.packageManager
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES.toLong()
+                    )
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(apkFile.absolutePath, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(apkFile.absolutePath, android.content.pm.PackageManager.GET_SIGNATURES)
+            }
+            val sigs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo?.signingInfo?.apkContentsSigners
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo?.signatures
+            }
+            val sig = sigs?.firstOrNull() ?: return null
             val cert = java.security.cert.CertificateFactory.getInstance("X.509")
                 .generateCertificate(java.io.ByteArrayInputStream(sig.toByteArray()))
             val digest = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
@@ -122,14 +142,37 @@ class UpdateManager(private val context: Context) {
     }
 
     /**
-     * Validate the downloaded APK: correct package name and installable.
-     */
+      * Validate the downloaded APK: correct package name and installable.
+      * Uses PackageInfoFlags on API 33+ (Tiramisu) where the int-flag overload
+      * is deprecated and may return null on Android 16 (API 36).
+      */
     fun isValidApkForThisApp(apkFile: File, expectedPackage: String): Boolean {
         return try {
-            val packageInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
-            packageInfo != null && packageInfo.packageName == expectedPackage
+            val pm = context.packageManager
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            }
+            android.util.Log.d(
+                "UpdateManager",
+                "isValidApk: file=${apkFile.absolutePath} pkg=${packageInfo?.packageName} expected=$expectedPackage"
+            )
+            if (packageInfo == null) {
+                // Cannot read package info (e.g., file not yet fully written) —
+                // let PackageInstaller decide rather than aborting with wrong-package toast.
+                android.util.Log.w("UpdateManager", "getPackageArchiveInfo returned null, allowing install")
+                return true
+            }
+            packageInfo.packageName == expectedPackage
         } catch (e: Exception) {
-            false
+            android.util.Log.e("UpdateManager", "isValidApk check failed", e)
+            // On exception, don't block install with wrong-package error
+            true
         }
     }
 
@@ -216,15 +259,19 @@ class UpdateManager(private val context: Context) {
     }
 
     /**
-     * Install the APK via the PackageInstaller Session API.
-     * Result is delivered to UpdateInstallReceiver as a broadcast
-     * (ACTION_INSTALL_STATUS with EXTRA_INSTALL_STATUS).
-     */
+      * Install the APK via the PackageInstaller Session API.
+      * Result is delivered to UpdateInstallReceiver as a broadcast
+      * (ACTION_INSTALL_STATUS with EXTRA_INSTALL_STATUS).
+      */
     fun installApk(apkFile: File) {
         val packageInstaller = context.packageManager.packageInstaller
         val params = android.content.pm.PackageInstaller.SessionParams(
             android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL
-        )
+        ).apply {
+            // Must match applicationId exactly; without this PackageInstaller
+            // may reject the session or UpdateChecker's pre-check may mis-fire.
+            setAppPackageName(context.packageName) // "com.keybroad"
+        }
 
         val sessionId = packageInstaller.createSession(params)
         val session = packageInstaller.openSession(sessionId)

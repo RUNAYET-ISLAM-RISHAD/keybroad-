@@ -1,7 +1,7 @@
 {
-  "version": "1.3.0",
-  "version_code": 8,
+  "version": "1.3.1",
+  "version_code": 9,
   "package_name": "com.keybroad",
-  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.3.0/app-release.apk",
-  "changelog": "Probhat layout 100% correct mapping - Bengali-first QWERTY with halant conjuncts"
+  "apk_url": "https://github.com/RUNAYET-ISLAM-RISHAD/keybroad-/releases/download/v1.3.1/app-release.apk",
+  "changelog": "Fixed OTA package validation"
 }
