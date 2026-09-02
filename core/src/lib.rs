@@ -3,6 +3,7 @@ pub mod conjunct_engine;
 pub mod dictionary;
 pub mod engine;
 pub mod layout;
+pub mod layouts;
 pub mod ngram;
 pub mod phonetic;
 pub mod types;

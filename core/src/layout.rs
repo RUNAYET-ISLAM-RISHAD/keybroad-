@@ -24,6 +24,9 @@ fn get_layout_json(layout_type: LayoutType) -> &'static str {
 /// This function parses the embedded JSON and constructs a `Layout` struct
 /// with efficient HashMap-based key lookups.
 ///
+/// For Probhat, the authoritative mapping is sourced from `crate::layouts::probhat`
+/// (separate Rust profile) to guarantee 100% correct separation per Sprint 1.
+///
 /// # Arguments
 /// * `layout_type` - The layout to load
 ///
@@ -43,11 +46,24 @@ pub fn load_layout(layout_type: LayoutType) -> Result<Layout, crate::types::Engi
     // Convert string-based key map to unicode-based key map
     let mut key_map = HashMap::new();
 
-    for (key_str, mapping) in &layout_json.keys {
-        // Each key string is a single character (e.g., "a", "b", "0")
-        if let Some(ch) = key_str.chars().next() {
-            let unicode = ch as u32;
-            key_map.insert(unicode, mapping.clone());
+    // Probhat: authoritative Rust profile (separate from JSON mixing)
+    if layout_type == LayoutType::Probhat {
+        let probhat = crate::layouts::probhat::probhat_map();
+        for (key_char, km) in probhat {
+            let unicode = key_char as u32;
+            let mapping = crate::types::KeyMapping {
+                output: km.primary.to_string(),
+                shift_output: km.secondary.to_string(),
+                display: km.primary.to_string(),
+            };
+            key_map.insert(unicode, mapping);
+        }
+    } else {
+        for (key_str, mapping) in &layout_json.keys {
+            if let Some(ch) = key_str.chars().next() {
+                let unicode = ch as u32;
+                key_map.insert(unicode, mapping.clone());
+            }
         }
     }
 
